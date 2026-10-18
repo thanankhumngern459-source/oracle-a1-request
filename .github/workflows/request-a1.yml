@@ -63,5 +63,6 @@ jobs:
           OCI_TENANCY: ${{ secrets.OCI_TENANCY }}
           OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING: "True"
           SUPPRESS_LABEL_WARNING: "True"
-          ROUNDS: "3"
+          # ลอง 1 ครั้งต่อรอบ (GitHub รันทุก 5 นาทีอยู่แล้ว) — ถี่กว่านี้ Oracle จะตอบ 429
+          ROUNDS: "1"
         run: bash request_a1_instance.sh
