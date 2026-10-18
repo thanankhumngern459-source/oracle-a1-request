@@ -54,6 +54,15 @@ reveal() {
   fi
 }
 
+# แสดงข้อความ error จาก Oracle เพื่อหาสาเหตุ แต่บน GitHub ปิด OCID/IP ทุกตัวก่อนพิมพ์
+show_error() {
+  if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+    echo "$1" | sed -E 's/ocid1\.[A-Za-z0-9._-]+/ocid1.***/g; s/[0-9]{1,3}(\.[0-9]{1,3}){3}/x.x.x.x/g'
+  else
+    echo "$1"
+  fi
+}
+
 # ---------- ตรวจสภาพแวดล้อม ----------
 if ! command -v oci >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
   log "ไม่พบคำสั่ง oci หรือ jq — สคริปต์นี้ออกแบบให้รันใน Oracle Cloud Shell"
@@ -68,8 +77,26 @@ if [ -z "$COMPARTMENT_ID" ]; then
   exit 1
 fi
 
+# ---------- ทดสอบการเชื่อมต่อก่อน (Secrets ผิดจะรู้ตรงนี้ พร้อมข้อความจาก Oracle) ----------
+if ! ad_json=$(oci iam availability-domain list --compartment-id "$COMPARTMENT_ID" 2>&1); then
+  summary "เชื่อมต่อ Oracle ไม่ได้ — ตรวจ Secrets (OCI_USER/OCI_TENANCY/OCI_FINGERPRINT/OCI_REGION/OCI_KEY)"
+  show_error "$ad_json"
+  exit 1
+fi
+mapfile -t ADS < <(echo "$ad_json" | jq -r '.data[].name')
+if [ "${#ADS[@]}" -eq 0 ]; then
+  log "ไม่พบ Availability Domain"
+  exit 1
+fi
+log "เชื่อมต่อ Oracle สำเร็จ (${#ADS[@]} Availability Domain)"
+
 # ---------- กันสร้างซ้ำ ----------
-existing_json=$(oci compute instance list --compartment-id "$COMPARTMENT_ID" --all 2>/dev/null) || existing_json='{"data":[]}'
+if ! existing_json=$(oci compute instance list --compartment-id "$COMPARTMENT_ID" --all 2>&1); then
+  log "อ่านรายการเครื่องไม่ได้"
+  show_error "$existing_json"
+  exit 1
+fi
+[ -z "$existing_json" ] && existing_json='{"data":[]}'
 existing_id=$(echo "$existing_json" | jq -r --arg name "$INSTANCE_NAME" \
   '[.data[]? | select(."display-name" == $name and ."lifecycle-state" != "TERMINATED" and ."lifecycle-state" != "TERMINATING")][0].id // empty')
 if [ -n "$existing_id" ]; then
@@ -91,10 +118,21 @@ if [ "$over_quota" = "true" ]; then
 fi
 
 # ---------- หาค่าที่ต้องใช้อัตโนมัติ ----------
-SUBNET_ID=$(oci network subnet list --compartment-id "$COMPARTMENT_ID" --all 2>/dev/null \
-  | jq -r --arg name "$SUBNET_NAME" '[.data[]? | select(."display-name" == $name)][0].id // empty')
+# subnet อาจอยู่ใน compartment ไหนก็ได้ (ไม่จำเป็นต้องเป็น root) ใช้ Search ค้นทั้งบัญชี
+# ถ้า Search ไม่เจอค่อยถอยไปดูใน root compartment ตรงๆ
+search_json=$(oci search resource structured-search \
+  --query-text "query subnet resources where displayName = '$SUBNET_NAME'" 2>&1) || search_json='{}'
+SUBNET_ID=$(echo "$search_json" | jq -r '[.data.items[]? | select(."lifecycle-state" == "AVAILABLE")][0].identifier // empty' 2>/dev/null)
+if [ -z "$SUBNET_ID" ]; then
+  subnet_json=$(oci network subnet list --compartment-id "$COMPARTMENT_ID" --all 2>&1) || subnet_json='{}'
+  SUBNET_ID=$(echo "$subnet_json" | jq -r --arg name "$SUBNET_NAME" '[.data[]? | select(."display-name" == $name)][0].id // empty' 2>/dev/null)
+fi
 if [ -z "$SUBNET_ID" ]; then
   log "ไม่พบ subnet ชื่อ \"$SUBNET_NAME\" — ตรวจชื่อใน Networking > Virtual cloud networks"
+  log "subnet ที่พบในบัญชี:"
+  oci search resource structured-search --query-text "query subnet resources" 2>&1 \
+    | jq -r '.data.items[]? | "  - " + ."display-name"' 2>/dev/null
+  show_error "$search_json"
   exit 1
 fi
 
@@ -105,12 +143,6 @@ IMAGE_ID=$(oci compute image list --compartment-id "$COMPARTMENT_ID" \
   | jq -r '[.data[]? | select(."display-name" | test("Minimal") | not)][0].id // empty')
 if [ -z "$IMAGE_ID" ]; then
   log "ไม่พบ image Ubuntu 24.04 สำหรับ $SHAPE"
-  exit 1
-fi
-
-mapfile -t ADS < <(oci iam availability-domain list --compartment-id "$COMPARTMENT_ID" 2>/dev/null | jq -r '.data[].name')
-if [ "${#ADS[@]}" -eq 0 ]; then
-  log "ไม่พบ Availability Domain"
   exit 1
 fi
 
@@ -166,12 +198,12 @@ while true; do
       log "ครั้งที่ $attempt: Oracle ขอให้ช้าลง (429) — เว้นระยะเป็น ${wait_seconds} วินาที"
     elif echo "$output" | grep -qi "LimitExceeded\|QuotaExceeded"; then
       log "เกินโควตาของบัญชี — หยุด ตรวจเครื่องที่มีอยู่ใน Compute > Instances"
-      echo "$output"
+      show_error "$output"
       exit 1
     else
       # error ที่ไม่รู้จัก (เช่น สิทธิ์ไม่พอ, ค่าผิด) ลองต่อไปก็ไม่หาย — หยุดแล้วแสดงข้อความ
       log "ครั้งที่ $attempt: เจอ error ที่ไม่ใช่เรื่องเครื่องเต็ม — หยุด"
-      echo "$output"
+      show_error "$output"
       exit 1
     fi
   done
