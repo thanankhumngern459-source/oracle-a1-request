@@ -42,15 +42,18 @@ jobs:
           OCI_REGION: ${{ secrets.OCI_REGION }}
           OCI_KEY: ${{ secrets.OCI_KEY }}
         run: |
+          # ตัดช่องว่าง/ขึ้นบรรทัดที่อาจติดมาตอนคัดลอกค่าใส่ Secret
+          trim() { printf '%s' "$1" | tr -d '[:space:]'; }
           mkdir -p ~/.oci
-          printf '%s\n' "$OCI_KEY" > ~/.oci/key.pem
+          # ไฟล์ .pem จาก Oracle บางรุ่นมีบรรทัด OCI_API_KEY ต่อท้าย ไม่ใช่ส่วนของกุญแจ
+          printf '%s\n' "$OCI_KEY" | tr -d '\r' | grep -v '^OCI_API_KEY$' > ~/.oci/key.pem
           chmod 600 ~/.oci/key.pem
           cat > ~/.oci/config <<EOF
           [DEFAULT]
-          user=${OCI_USER}
-          fingerprint=${OCI_FINGERPRINT}
-          tenancy=${OCI_TENANCY}
-          region=${OCI_REGION}
+          user=$(trim "$OCI_USER")
+          fingerprint=$(trim "$OCI_FINGERPRINT")
+          tenancy=$(trim "$OCI_TENANCY")
+          region=$(trim "$OCI_REGION")
           key_file=~/.oci/key.pem
           EOF
           chmod 600 ~/.oci/config
@@ -59,5 +62,6 @@ jobs:
         env:
           OCI_TENANCY: ${{ secrets.OCI_TENANCY }}
           OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING: "True"
+          SUPPRESS_LABEL_WARNING: "True"
           ROUNDS: "3"
         run: bash request_a1_instance.sh
