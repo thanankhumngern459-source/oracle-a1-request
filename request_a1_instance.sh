@@ -71,11 +71,20 @@ fi
 
 # Cloud Shell ตั้งค่า OCI_TENANCY ไว้ให้เสมอ ส่วน GitHub Actions ส่งมาจาก Secret
 # ใช้ root compartment ของบัญชี
-COMPARTMENT_ID="${OCI_TENANCY:-}"
+# ตัดช่องว่าง/ขึ้นบรรทัดที่อาจติดมาตอนคัดลอกค่าใส่ Secret (ติดมาแล้ว Oracle จะตอบ 404)
+COMPARTMENT_ID=$(printf '%s' "${OCI_TENANCY:-}" | tr -d '[:space:]')
 if [ -z "$COMPARTMENT_ID" ]; then
   log "ไม่พบ OCI_TENANCY — รันใน Oracle Cloud Shell หรือตั้ง Secret OCI_TENANCY ใน GitHub"
   exit 1
 fi
+# กันใส่ค่าสลับช่อง (เช่นเอา user OCID มาใส่ OCI_TENANCY) — บอกแค่ "ชนิด" ของ OCID ไม่แสดงค่าจริง
+case "$COMPARTMENT_ID" in
+  ocid1.tenancy.*) ;;
+  *)
+    summary "OCI_TENANCY ไม่ใช่ tenancy OCID (ได้ชนิด: $(printf '%s' "$COMPARTMENT_ID" | cut -d. -f1-2)) — ต้องเป็นค่าหลัง tenancy= ที่ขึ้นต้นด้วย ocid1.tenancy."
+    exit 1
+    ;;
+esac
 
 # ---------- ทดสอบการเชื่อมต่อก่อน (Secrets ผิดจะรู้ตรงนี้ พร้อมข้อความจาก Oracle) ----------
 if ! ad_json=$(oci iam availability-domain list --compartment-id "$COMPARTMENT_ID" 2>&1); then
