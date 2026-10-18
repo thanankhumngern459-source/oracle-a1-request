@@ -8,7 +8,7 @@
 # วิธีใช้ — เลือกได้ 2 แบบ:
 #   ก) GitHub Actions (ทำงานแม้ปิดโน้ตบุ๊ก): ดู .github/workflows/request-a1.yml
 #      workflow จะตั้งค่า ~/.oci/config จาก GitHub Secrets แล้วรันไฟล์นี้ทุก 5 นาที
-#      ด้วย ROUNDS=4 (ลองครบทุก AD 4 รอบ ห่างกัน 60 วินาที แล้วจบ รอรอบถัดไป)
+#      ด้วย ROUNDS=1 (ลองครบทุก AD 1 รอบแล้วจบ รอรอบถัดไปใน 5 นาที)
 #   ข) Oracle Cloud Shell (ต้องเปิดหน้าเว็บค้างไว้): อัปโหลดไฟล์นี้แล้วรัน
 #      bash request_a1_instance.sh   (ไม่ตั้ง ROUNDS = ลองไปเรื่อยๆ จนได้)
 #
@@ -168,7 +168,9 @@ attempt=0
 while true; do
   for ad in "${ADS[@]}"; do
     attempt=$((attempt + 1))
-    output=$(oci compute instance launch \
+    # --no-retry: ให้ CLI ตอบกลับทันทีเมื่อเครื่องเต็ม แทนที่จะลองซ้ำเองข้างใน
+    # (ลองซ้ำเองทำให้ช้าครั้งละ ~2 นาทีและโดน 429) การเว้นระยะให้สคริปต์คุมเอง
+    output=$(oci compute instance launch --no-retry \
       --compartment-id "$COMPARTMENT_ID" \
       --availability-domain "$ad" \
       --display-name "$INSTANCE_NAME" \
