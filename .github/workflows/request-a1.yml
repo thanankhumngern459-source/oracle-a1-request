@@ -1,0 +1,63 @@
+# ============================================================
+# request-a1.yml
+# ------------------------------------------------------------
+# ขอเครื่อง Oracle Always Free A1 ทุก 5 นาทีบนเครื่องของ GitHub
+# (ทำงานแม้ปิดโน้ตบุ๊ก) จนกว่าจะได้ — ได้แล้วรอบถัดๆ ไปจะเจอว่ามีเครื่อง
+# อยู่แล้วและจบทันที จากนั้นกด "Disable workflow" ในแท็บ Actions ได้เลย
+#
+# ต้องตั้ง Secrets ใน Settings > Secrets and variables > Actions ให้ครบ 5 ตัว:
+#   OCI_USER, OCI_TENANCY, OCI_FINGERPRINT, OCI_REGION  (คัดลอกจากหน้า API keys
+#   ของ Oracle > View configuration file) และ OCI_KEY = เนื้อหาไฟล์ .pem ทั้งไฟล์
+# ============================================================
+name: Request Oracle A1 server
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+# ห้ามรันซ้อนกัน 2 รอบพร้อมกัน ไม่งั้นอาจได้เครื่องซ้ำ 2 เครื่อง
+concurrency:
+  group: request-a1
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  request:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install OCI CLI
+        run: pip install --quiet oci-cli
+
+      - name: Write OCI config from secrets
+        env:
+          OCI_USER: ${{ secrets.OCI_USER }}
+          OCI_TENANCY: ${{ secrets.OCI_TENANCY }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_REGION: ${{ secrets.OCI_REGION }}
+          OCI_KEY: ${{ secrets.OCI_KEY }}
+        run: |
+          mkdir -p ~/.oci
+          printf '%s\n' "$OCI_KEY" > ~/.oci/key.pem
+          chmod 600 ~/.oci/key.pem
+          cat > ~/.oci/config <<EOF
+          [DEFAULT]
+          user=${OCI_USER}
+          fingerprint=${OCI_FINGERPRINT}
+          tenancy=${OCI_TENANCY}
+          region=${OCI_REGION}
+          key_file=~/.oci/key.pem
+          EOF
+          chmod 600 ~/.oci/config
+
+      - name: Request instance
+        env:
+          OCI_TENANCY: ${{ secrets.OCI_TENANCY }}
+          OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING: "True"
+          ROUNDS: "3"
+        run: bash request_a1_instance.sh
